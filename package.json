@@ -1,0 +1,66 @@
+{
+  "name": "whales-market-mcp",
+  "version": "1.0.3",
+  "description": "MCP Server for Whales Market - OTC trading platform for pre-market tokens, points, and allocations",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "whales-market-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "whales-market",
+    "otc",
+    "pre-market",
+    "crypto",
+    "ai",
+    "claude",
+    "cursor"
+  ],
+  "author": {
+    "name": "Whales Market",
+    "email": "dev@whales.market",
+    "url": "https://whales.market"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bigbearman/whales-market-mcp.git"
+  },
+  "homepage": "https://whales.market",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.29.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "axios": "^1.9.0",
+    "bs58": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "ethers": "^6.16.0",
+    "express": "^5.2.1",
+    "tweetnacl": "^1.0.3",
+    "zod": "^3.24.0"
+  }
+}

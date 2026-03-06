@@ -1,0 +1,12 @@
+src/
+.claude/
+.env
+.env.*
+.git
+.gitignore
+tsconfig.json
+Dockerfile
+CLAUDE.md
+*.log
+.DS_Store
+node_modules/

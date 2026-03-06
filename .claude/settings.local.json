@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npm run build)",
+      "Bash(git init)",
+      "Bash(git add -A)",
+      "Bash(git branch -m main)",
+      "Bash(git commit:*)",
+      "Bash(npm install dotenv)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl:*)",
+      "WebFetch(domain:docs.claudekit.cc)",
+      "Bash(npm whoami:*)",
+      "Bash(npm pack:*)",
+      "Bash(npm publish:*)",
+      "Bash(python3:*)",
+      "Bash(xxd:*)"
+    ]
+  }
+}
