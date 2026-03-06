@@ -29,6 +29,7 @@ import { WalletManager } from './core/wallet.js';
 import { formatResult, handleError } from './core/utils.js';
 import { AdapterRegistry } from './registry.js';
 import { WhalesMarketAdapter } from './adapters/whales-market/index.js';
+import { PolymarketAdapter } from './adapters/polymarket/index.js';
 
 // ── Bootstrap ────────────────────────────────────────────
 
@@ -36,10 +37,14 @@ const wallet = new WalletManager();
 const registry = new AdapterRegistry();
 
 // Register adapters based on AGENT_TRADE_VENUES env (default: all available)
-const enabledVenues = (process.env.AGENT_TRADE_VENUES || 'whales-market').split(',').map((v) => v.trim());
+const enabledVenues = (process.env.AGENT_TRADE_VENUES || 'whales-market,polymarket').split(',').map((v) => v.trim());
 
 if (enabledVenues.includes('whales-market')) {
   registry.register(new WhalesMarketAdapter(wallet));
+}
+
+if (enabledVenues.includes('polymarket')) {
+  registry.register(new PolymarketAdapter(wallet));
 }
 
 // ── Create Server ─────────────────────────────────────────
