@@ -1,9 +1,36 @@
 import axios, { type AxiosInstance } from 'axios';
-import type {
-  ITokenParams,
-  IOffersParams,
-  IChartParams,
-} from './types.js';
+
+export interface ITokenParams {
+  type?: string;
+  search?: string;
+  status?: string;
+  category?: string;
+  chain_id?: number;
+  symbol?: string;
+  sortField?: string;
+  sortType?: string;
+  sortTotalVolume?: string;
+  page?: number;
+  take?: number;
+}
+
+export interface IOffersParams {
+  token_id?: string;
+  offer_type?: string;
+  symbol?: string;
+  category?: string;
+  chain_id?: number;
+  status?: string;
+  page?: number;
+  take?: number;
+}
+
+export interface IChartParams {
+  token_id: string;
+  resolution?: string;
+  from?: number;
+  to?: number;
+}
 
 export class WhalesMarketAPI {
   private client: AxiosInstance;
@@ -19,8 +46,7 @@ export class WhalesMarketAPI {
     });
   }
 
-  // ── Tokens ──────────────────────────────────────────────
-
+  // Tokens
   async getTokens(params: ITokenParams = {}) {
     const { data } = await this.client.get('/v2/tokens', {
       params: { take: params.take ?? 20, ...params },
@@ -43,8 +69,7 @@ export class WhalesMarketAPI {
     return data;
   }
 
-  // ── Market Stats ────────────────────────────────────────
-
+  // Market Stats
   async getMarketStats() {
     const { data } = await this.client.get('/statistics/overview');
     return data;
@@ -55,10 +80,8 @@ export class WhalesMarketAPI {
     return data;
   }
 
-  // ── Offers ──────────────────────────────────────────────
-
+  // Offers
   async getOffers(params: IOffersParams = {}) {
-    // Map MCP params to backend DTO field names
     const queryParams: Record<string, unknown> = {
       take: params.take ?? 20,
       page: params.page,
@@ -80,8 +103,7 @@ export class WhalesMarketAPI {
     return data;
   }
 
-  // ── Orders ──────────────────────────────────────────────
-
+  // Orders
   async getOrdersByAddress(address: string, params: { page?: number; take?: number } = {}) {
     const { data } = await this.client.get(`/v2/orders-by-address/${address}`, {
       params: { take: params.take ?? 20, ...params },
@@ -89,8 +111,7 @@ export class WhalesMarketAPI {
     return data;
   }
 
-  // ── Wallet & User ──────────────────────────────────────
-
+  // Wallet & User
   async getWalletInfo(address: string) {
     const { data } = await this.client.get(`/v2/users/wallet-info/${address}`);
     return data;
@@ -106,8 +127,7 @@ export class WhalesMarketAPI {
     return data;
   }
 
-  // ── Recent Trades ──────────────────────────────────────
-
+  // Recent Trades
   async getRecentTrades(params: { page?: number; take?: number } = {}) {
     const { data } = await this.client.get('/v2/recent-trades', {
       params: { take: params.take ?? 20, ...params },
@@ -115,8 +135,7 @@ export class WhalesMarketAPI {
     return data;
   }
 
-  // ── Referral ────────────────────────────────────────────
-
+  // Referral
   async getReferralLeaderboard(params: { page?: number; take?: number } = {}) {
     const { data } = await this.client.get('/referral/leaderboard', {
       params: { take: params.take ?? 20, ...params },
@@ -129,8 +148,7 @@ export class WhalesMarketAPI {
     return data;
   }
 
-  // ── Dashboard ──────────────────────────────────────────
-
+  // Dashboard
   async getOrdersToDeliver(address: string, params: { page?: number; take?: number } = {}) {
     const { data } = await this.client.get(`/v2/orders-to-deliver/${address}`, {
       params: { take: params.take ?? 20, ...params },
@@ -162,8 +180,7 @@ export class WhalesMarketAPI {
     return data;
   }
 
-  // ── Phase 2: New Endpoints ────────────────────────────
-
+  // Network & Offer detail
   async getNetworkChains() {
     const { data } = await this.client.get('/network-chains');
     return data;

@@ -349,7 +349,7 @@ export const FUND_DISTRIBUTOR_ADDRESS: Record<number, string> = {
 
 // Helper to get the default public RPC URL for a chain ID.
 export function getEvmRpcUrl(chainId: number): string {
-  const envRpc = process.env.WM_EVM_RPC;
+  const envRpc = process.env.AT_EVM_RPC || process.env.WM_EVM_RPC;
   if (envRpc) return envRpc;
   return EVM_CHAINS[chainId]?.rpcUrl ?? '';
 }

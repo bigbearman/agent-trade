@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// Auto-read version from package.json
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PKG_VERSION = (() => {
   try {
@@ -16,6 +15,7 @@ const PKG_VERSION = (() => {
     return '0.0.0';
   }
 })();
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -24,74 +24,93 @@ import { z } from 'zod';
 import { Keypair } from '@solana/web3.js';
 import { Wallet } from 'ethers';
 import bs58 from 'bs58';
-import { WhalesMarketAPI } from './api-client.js';
-import { WalletManager } from './wallet.js';
-import { buildOrderBook, executeTradeIntent, reactToOffer, cancelOffer, cancelOrder, resolveTokenChainInfo } from './trading.js';
-import { EVM_CHAINS, isSolanaChain, isEvmChain } from './evm-constants.js';
 
-// ── Config ────────────────────────────────────────────────
+import { WalletManager } from './core/wallet.js';
+import { formatResult, handleError } from './core/utils.js';
+import { AdapterRegistry } from './registry.js';
+import { WhalesMarketAdapter } from './adapters/whales-market/index.js';
 
-const API_URL = process.env.WM_API_URL || 'https://api.whales.market';
-const AUTH_TOKEN = process.env.WM_AUTH_TOKEN;
+// ── Bootstrap ────────────────────────────────────────────
 
-const api = new WhalesMarketAPI(API_URL, AUTH_TOKEN);
 const wallet = new WalletManager();
+const registry = new AdapterRegistry();
 
-// ── Helper ────────────────────────────────────────────────
+// Register adapters based on AGENT_TRADE_VENUES env (default: all available)
+const enabledVenues = (process.env.AGENT_TRADE_VENUES || 'whales-market').split(',').map((v) => v.trim());
 
-function formatResult(data: unknown): { type: 'text'; text: string }[] {
-  return [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }];
-}
-
-function handleError(error: unknown): { content: { type: 'text'; text: string }[]; isError: true } {
-  const message = error instanceof Error ? error.message : String(error);
-  return { content: [{ type: 'text' as const, text: `Error: ${message}` }], isError: true };
+if (enabledVenues.includes('whales-market')) {
+  registry.register(new WhalesMarketAdapter(wallet));
 }
 
 // ── Create Server ─────────────────────────────────────────
 
 function createServer(): McpServer {
   const server = new McpServer({
-    name: 'whales-market-mcp',
+    name: 'agent-trade',
     version: PKG_VERSION,
   });
 
-  // ── Tool 1: search_tokens ─────────────────────────────────
+  // ── Universal Tool: list_venues ────────────────────────
 
   server.tool(
-    'search_tokens',
-    'Search and list tokens on Whales Market. Filter by category (pre_market, otc_market, point_market, vesting_market), search by name/symbol, sort by volume or price.',
+    'list_venues',
+    'List all available and configured trading venues.',
+    {},
+    async () => {
+      try {
+        const venues = registry.list().map((a) => ({
+          name: a.name,
+          displayName: a.displayName,
+          configured: a.isConfigured(),
+        }));
+        return { content: formatResult(venues) };
+      } catch (error) {
+        return handleError(error);
+      }
+    },
+  );
+
+  // ── Universal Tool: search_markets ─────────────────────
+
+  server.tool(
+    'search_markets',
+    'Search and list markets across trading venues. Filter by venue, category, name/symbol.',
     {
-      search: z.string().optional().describe('Search by token name or symbol'),
-      category: z.enum(['pre_market', 'otc_market', 'point_market', 'vesting_market', 'whitelist_market', 'rune_market']).optional().describe('Token category'),
-      status: z.string().optional().describe('Token status filter'),
+      venue: z.string().optional().describe('Specific venue (e.g., "whales-market"). Omit to search all.'),
+      search: z.string().optional().describe('Search by name or symbol'),
+      category: z.string().optional().describe('Market category filter'),
+      status: z.string().optional().describe('Status filter'),
       chain_id: z.number().optional().describe('Blockchain chain ID'),
-      sortField: z.string().optional().describe('Field to sort by'),
+      sortField: z.string().optional().describe('Sort field'),
       sortType: z.enum(['ASC', 'DESC']).optional().describe('Sort direction'),
       page: z.number().optional().describe('Page number (default: 1)'),
       take: z.number().optional().describe('Items per page (default: 20, max: 50)'),
     },
     async (params) => {
       try {
-        const result = await api.getTokens(params);
-        return { content: formatResult(result) };
+        const { venue, ...searchParams } = params;
+        const adapters = venue ? [registry.require(venue)] : registry.getConfigured();
+        const results = await Promise.all(adapters.map((a) => a.searchMarkets(searchParams)));
+        return { content: formatResult(results.flat()) };
       } catch (error) {
         return handleError(error);
       }
     },
   );
 
-  // ── Tool 2: get_token_detail ──────────────────────────────
+  // ── Universal Tool: get_market ─────────────────────────
 
   server.tool(
-    'get_token_detail',
-    'Get detailed information about a specific token on Whales Market, including price, volume, settlement time, and market data.',
+    'get_market',
+    'Get detailed information about a specific market/token.',
     {
-      symbol: z.string().describe('Token symbol (e.g., "HYPE", "GRASS", "EIGEN")'),
+      venue: z.string().optional().describe('Venue name (auto-detected if only one configured)'),
+      market_id: z.string().describe('Market ID or symbol (e.g., "HYPE", "GRASS")'),
     },
-    async ({ symbol }) => {
+    async ({ venue, market_id }) => {
       try {
-        const result = await api.getTokenDetail(symbol);
+        const adapter = venue ? registry.require(venue) : registry.requireAny();
+        const result = await adapter.getMarketDetail(market_id);
         return { content: formatResult(result) };
       } catch (error) {
         return handleError(error);
@@ -99,63 +118,57 @@ function createServer(): McpServer {
     },
   );
 
-  // ── Tool 3: get_token_chart ───────────────────────────────
+  // ── Universal Tool: get_order_book ─────────────────────
 
   server.tool(
-    'get_token_chart',
-    'Get historical price chart data for a token. Useful for analyzing price trends and movements.',
+    'get_order_book',
+    'Get the order book for a market: bids, asks, spread.',
     {
-      token_id: z.string().describe('Token ID'),
-      resolution: z.string().optional().describe('Chart resolution (e.g., "1", "5", "15", "60", "D")'),
-      from: z.number().optional().describe('Start timestamp (unix seconds)'),
-      to: z.number().optional().describe('End timestamp (unix seconds)'),
+      venue: z.string().optional().describe('Venue name'),
+      market_id: z.string().describe('Market ID or symbol'),
+      depth: z.number().optional().describe('Number of price levels per side (default: 10)'),
     },
-    async (params) => {
+    async ({ venue, market_id, depth }) => {
       try {
-        const result = await api.getTokenChartData(params);
-        return { content: formatResult(result) };
+        const adapter = venue ? registry.require(venue) : registry.requireAny();
+        const book = await adapter.getOrderBook(market_id, depth);
+
+        const bestBid = book.bids.length > 0 ? book.bids[0].price : 0;
+        const bestAsk = book.asks.length > 0 ? book.asks[0].price : 0;
+        const spread = bestAsk && bestBid ? bestAsk - bestBid : 0;
+        const spreadPercent = bestBid > 0 ? (spread / bestBid) * 100 : 0;
+
+        return {
+          content: formatResult({
+            market: market_id,
+            bids: book.bids,
+            asks: book.asks,
+            bestBid,
+            bestAsk,
+            spread,
+            spreadPercent,
+          }),
+        };
       } catch (error) {
         return handleError(error);
       }
     },
   );
 
-  // ── Tool 4: get_offers ────────────────────────────────────
-
-  server.tool(
-    'get_offers',
-    'Get buy/sell offers for tokens on Whales Market. Filter by symbol, offer type (buy/sell), category, and status.',
-    {
-      symbol: z.string().describe('Token symbol (required, e.g., "HYPE", "PENGU")'),
-      offer_type: z.enum(['buy', 'sell']).optional().describe('Offer type: buy or sell'),
-      category: z.enum(['pre_market', 'otc_market', 'point_market', 'vesting_market']).optional().describe('Market category'),
-      status: z.string().optional().describe('Offer status (open, closed, filled, etc.)'),
-      chain_id: z.number().optional().describe('Blockchain chain ID'),
-      page: z.number().optional().describe('Page number'),
-      take: z.number().optional().describe('Items per page (default: 20)'),
-    },
-    async (params) => {
-      try {
-        const result = await api.getOffers(params);
-        return { content: formatResult(result) };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 5: get_recent_trades ─────────────────────────────
+  // ── Universal Tool: get_recent_trades ──────────────────
 
   server.tool(
     'get_recent_trades',
-    'Get the most recent trades across all markets on Whales Market.',
+    'Get recent trades for a market or across all markets.',
     {
-      page: z.number().optional().describe('Page number'),
-      take: z.number().optional().describe('Items per page (default: 20)'),
+      venue: z.string().optional().describe('Venue name'),
+      market_id: z.string().optional().describe('Market ID (omit for all markets)'),
+      limit: z.number().optional().describe('Number of trades (default: 20)'),
     },
-    async (params) => {
+    async ({ venue, market_id, limit }) => {
       try {
-        const result = await api.getRecentTrades(params);
+        const adapter = venue ? registry.require(venue) : registry.requireAny();
+        const result = await adapter.getRecentTrades(market_id || '', limit);
         return { content: formatResult(result) };
       } catch (error) {
         return handleError(error);
@@ -163,60 +176,78 @@ function createServer(): McpServer {
     },
   );
 
-  // ── Tool 6: get_market_stats ──────────────────────────────
+  // ── Universal Tool: trade ──────────────────────────────
 
   server.tool(
-    'get_market_stats',
-    'Get overall market statistics and overview for Whales Market, including total volume, number of trades, and active markets.',
-    {},
-    async () => {
+    'trade',
+    'Create a buy/sell order. Agent mode: validates limits, signs, and executes. User mode: returns preview.',
+    {
+      venue: z.string().optional().describe('Venue name'),
+      market_id: z.string().describe('Market ID or symbol'),
+      side: z.enum(['buy', 'sell']).describe('Trade side'),
+      amount: z.number().positive().describe('Amount of tokens'),
+      price: z.number().positive().describe('Price per token in USD'),
+      dry_run: z.boolean().optional().describe('Preview without executing (default: false)'),
+    },
+    async ({ venue, market_id, side, amount, price, dry_run }) => {
       try {
-        const [overview, volume] = await Promise.all([
-          api.getMarketStats(),
-          api.getStatisticVolume(),
-        ]);
-        return { content: formatResult({ overview, volume }) };
+        const adapter = venue ? registry.require(venue) : registry.requireAny();
+        const mode = wallet.isAgentMode && !(dry_run ?? false) ? 'agent' : 'user';
+        const result = await adapter.trade({
+          market_id,
+          side,
+          amount,
+          price,
+          mode,
+        });
+        return {
+          content: formatResult(result),
+          ...(result.success ? {} : { isError: true as const }),
+        };
       } catch (error) {
         return handleError(error);
       }
     },
   );
 
-  // ── Tool 7: get_wallet_info ──────────────────────────────
+  // ── Universal Tool: cancel ─────────────────────────────
 
   server.tool(
-    'get_wallet_info',
-    'Get wallet information and user details for a specific address on Whales Market, including tier, discount, and statistics.',
+    'cancel',
+    'Cancel an open order/offer.',
     {
-      address: z.string().describe('Wallet address'),
+      venue: z.string().optional().describe('Venue name'),
+      order_id: z.string().describe('Order/offer ID to cancel'),
+      chain_id: z.number().optional().describe('Chain ID for EVM (auto-detected if possible)'),
     },
-    async ({ address }) => {
+    async ({ venue, order_id, chain_id }) => {
       try {
-        const [walletInfo, stats, discount] = await Promise.all([
-          api.getWalletInfo(address),
-          api.getUserStats(address),
-          api.getUserDiscount(address),
-        ]);
-        return { content: formatResult({ walletInfo, stats, discount }) };
+        const adapter = venue ? registry.require(venue) : registry.requireAny();
+        const result = await adapter.cancel(order_id, { chain_id });
+        return {
+          content: formatResult(result),
+          ...(result.success ? {} : { isError: true as const }),
+        };
       } catch (error) {
         return handleError(error);
       }
     },
   );
 
-  // ── Tool 8: get_orders_by_address ────────────────────────
+  // ── Universal Tool: get_positions ──────────────────────
 
   server.tool(
-    'get_orders_by_address',
-    'Get all orders (open, filled, settled) for a specific wallet address on Whales Market.',
+    'get_positions',
+    'Get portfolio/positions for your wallet or a specific address.',
     {
-      address: z.string().describe('Wallet address'),
-      page: z.number().optional().describe('Page number'),
-      take: z.number().optional().describe('Items per page (default: 20)'),
+      venue: z.string().optional().describe('Venue name'),
+      address: z.string().optional().describe('Wallet address (defaults to configured wallet)'),
     },
-    async ({ address, ...params }) => {
+    async ({ venue, address }) => {
       try {
-        const result = await api.getOrdersByAddress(address, params);
+        const adapter = venue ? registry.require(venue) : registry.requireAny();
+        const addr = address || wallet.getAddress();
+        const result = await adapter.getPositions(addr);
         return { content: formatResult(result) };
       } catch (error) {
         return handleError(error);
@@ -224,15 +255,20 @@ function createServer(): McpServer {
     },
   );
 
-  // ── Tool 9: get_upcoming_tokens ──────────────────────────
+  // ── Universal Tool: get_orders ─────────────────────────
 
   server.tool(
-    'get_upcoming_tokens',
-    'Get the list of upcoming tokens that will be available for trading on Whales Market.',
-    {},
-    async () => {
+    'get_orders',
+    'Get open orders for your wallet or a specific address.',
+    {
+      venue: z.string().optional().describe('Venue name'),
+      address: z.string().optional().describe('Wallet address (defaults to configured wallet)'),
+    },
+    async ({ venue, address }) => {
       try {
-        const result = await api.getUpcomingTokens();
+        const adapter = venue ? registry.require(venue) : registry.requireAny();
+        const addr = address || wallet.getAddress();
+        const result = await adapter.getOpenOrders(addr);
         return { content: formatResult(result) };
       } catch (error) {
         return handleError(error);
@@ -240,33 +276,11 @@ function createServer(): McpServer {
     },
   );
 
-  // ── Tool 10: get_leaderboard ─────────────────────────────
+  // ── Universal Tool: wallet_status ──────────────────────
 
   server.tool(
-    'get_leaderboard',
-    'Get the referral leaderboard and live referral stats on Whales Market.',
-    {
-      page: z.number().optional().describe('Page number'),
-      take: z.number().optional().describe('Items per page (default: 20)'),
-    },
-    async (params) => {
-      try {
-        const [leaderboard, liveStats] = await Promise.all([
-          api.getReferralLeaderboard(params),
-          api.getReferralLiveStats(),
-        ]);
-        return { content: formatResult({ leaderboard, liveStats }) };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 11: get_wallet_status ───────────────────────────
-
-  server.tool(
-    'get_wallet_status',
-    'Get current wallet configuration and status: address, type (solana/evm), mode (agent/user), spend limits, and daily spend remaining. Reads from env config.',
+    'wallet_status',
+    'Get wallet configuration, balance, and spend limits.',
     {},
     async () => {
       try {
@@ -274,7 +288,7 @@ function createServer(): McpServer {
           return {
             content: formatResult({
               configured: false,
-              message: 'No wallet configured. Use the setup_wallet tool to get started.',
+              message: 'No wallet configured. Use setup_wallet tool or set AT_AGENT_PRIVATE_KEY / AT_WALLET_ADDRESS.',
             }),
           };
         }
@@ -286,22 +300,19 @@ function createServer(): McpServer {
     },
   );
 
-  // ── Tool 11b: setup_wallet ─────────────────────────────
+  // ── Universal Tool: setup_wallet ───────────────────────
 
   server.tool(
     'setup_wallet',
-    'Interactive wallet setup guide. Checks current config, offers options to use existing wallet or generate a new dedicated agent wallet. Call this before any trading operation if no wallet is configured.',
+    'Wallet setup guide. Check config, generate a new agent wallet, or show setup instructions.',
     {
-      action: z.enum(['status', 'generate', 'guide']).optional().describe(
-        'Action: "status" = check current config, "generate" = create new Solana keypair for agent mode, "guide" = show setup instructions (default: "status")'
-      ),
+      action: z.enum(['status', 'generate', 'guide']).optional().describe('Action: status, generate, or guide (default: status)'),
       wallet_type: z.enum(['solana', 'evm']).optional().describe('Wallet type for generate (default: solana)'),
     },
     async ({ action, wallet_type }) => {
       try {
         const act = action ?? 'status';
 
-        // Status check
         if (act === 'status') {
           if (wallet.hasWallet()) {
             const status = wallet.getStatus();
@@ -309,6 +320,7 @@ function createServer(): McpServer {
               content: formatResult({
                 configured: true,
                 ...status,
+                venues: registry.getConfigured().map((a) => a.name),
                 message: `Wallet configured in ${status.mode} mode. Ready to trade.`,
               }),
             };
@@ -316,25 +328,20 @@ function createServer(): McpServer {
           return {
             content: formatResult({
               configured: false,
+              venues: registry.list().map((a) => a.name),
               message: 'No wallet configured.',
               options: [
-                '1. Use your existing wallet (read-only): set WM_WALLET_ADDRESS=<your address>',
-                '2. Generate a new agent wallet: call setup_wallet with action="generate"',
-                '3. Use your own private key (full auto-trade): set WM_AGENT_PRIVATE_KEY=<key>',
+                '1. Read-only: set AT_WALLET_ADDRESS=<your address>',
+                '2. Generate new: call setup_wallet with action="generate"',
+                '3. Use your key: set AT_AGENT_PRIVATE_KEY=<key>',
               ],
-              how_to_set: {
-                claude_code: 'claude mcp update whales-market --env WM_WALLET_ADDRESS=<addr>',
-                cursor: 'Settings → MCP → whales-market → env → add WM_WALLET_ADDRESS',
-                manual: 'Set environment variable before starting MCP server',
-              },
             }),
           };
         }
 
-        // Generate new wallet — saves key to file, NEVER returns key in response
         if (act === 'generate') {
           const type = wallet_type ?? 'solana';
-          const dataDir = process.env.WM_DATA_DIR || join(process.env.HOME || '/tmp', '.whales-market-mcp');
+          const dataDir = process.env.AT_DATA_DIR || process.env.WM_DATA_DIR || join(process.env.HOME || '/tmp', '.agent-trade');
           const { mkdirSync: mkDir, writeFileSync: writeFile, chmodSync: chmod } = await import('fs');
           const { join: pathJoin } = await import('path');
           try { mkDir(dataDir, { recursive: true }); } catch { /* ignore */ }
@@ -343,8 +350,6 @@ function createServer(): McpServer {
             const keypair = Keypair.generate();
             const publicKey = keypair.publicKey.toBase58();
             const secretKey = bs58.encode(keypair.secretKey);
-
-            // Save key to file with restricted permissions
             const keyFile = pathJoin(dataDir, `agent-key-${publicKey.slice(0, 8)}.txt`);
             writeFile(keyFile, secretKey, { mode: 0o600 });
             try { chmod(keyFile, 0o600); } catch { /* ignore on Windows */ }
@@ -355,28 +360,22 @@ function createServer(): McpServer {
                 wallet_type: 'solana',
                 address: publicKey,
                 key_saved_to: keyFile,
-                warning: '⚠️ Private key saved to file above. DO NOT share this file. Key is NOT shown in this response for security.',
+                warning: 'Private key saved to file above. DO NOT share. Key is NOT shown in this response.',
                 next_steps: [
-                  `1. Key saved at: ${keyFile} (read-only by owner)`,
-                  `2. Set env: WM_AGENT_PRIVATE_KEY=$(cat ${keyFile})`,
-                  `3. Set env: WM_WALLET_TYPE=solana`,
+                  `1. Key saved at: ${keyFile}`,
+                  `2. Set env: AT_AGENT_PRIVATE_KEY=$(cat ${keyFile})`,
+                  `3. Set env: AT_WALLET_TYPE=solana`,
                   `4. Fund the wallet: send SOL to ${publicKey}`,
                   `5. Restart MCP server`,
                 ],
-                setup_command: {
-                  claude_code: `claude mcp update whales-market --env WM_AGENT_PRIVATE_KEY=$(cat ${keyFile}) --env WM_WALLET_TYPE=solana --env WM_DAILY_LIMIT=200 --env WM_SPEND_LIMIT_PER_TX=50`,
-                },
                 safety: {
-                  per_tx_limit: '$50 (configurable via WM_SPEND_LIMIT_PER_TX)',
-                  daily_limit: '$200 (configurable via WM_DAILY_LIMIT)',
-                  tip: 'Only deposit what you can afford to lose. This is a dedicated agent wallet.',
+                  per_tx_limit: '$50 (AT_SPEND_LIMIT_PER_TX)',
+                  daily_limit: '$200 (AT_DAILY_LIMIT)',
                 },
               }),
             };
           } else {
             const evmWallet = Wallet.createRandom();
-
-            // Save key to file with restricted permissions
             const keyFile = pathJoin(dataDir, `agent-key-${evmWallet.address.slice(0, 10)}.txt`);
             writeFile(keyFile, evmWallet.privateKey, { mode: 0o600 });
             try { chmod(keyFile, 0o600); } catch { /* ignore on Windows */ }
@@ -387,21 +386,17 @@ function createServer(): McpServer {
                 wallet_type: 'evm',
                 address: evmWallet.address,
                 key_saved_to: keyFile,
-                warning: '⚠️ Private key saved to file above. DO NOT share this file. Key is NOT shown in this response for security.',
+                warning: 'Private key saved to file above. DO NOT share. Key is NOT shown in this response.',
                 next_steps: [
-                  `1. Key saved at: ${keyFile} (read-only by owner)`,
-                  `2. Set env: WM_AGENT_PRIVATE_KEY=$(cat ${keyFile})`,
-                  `3. Set env: WM_WALLET_TYPE=evm`,
+                  `1. Key saved at: ${keyFile}`,
+                  `2. Set env: AT_AGENT_PRIVATE_KEY=$(cat ${keyFile})`,
+                  `3. Set env: AT_WALLET_TYPE=evm`,
                   `4. Fund the wallet: send ETH/USDC to ${evmWallet.address}`,
                   `5. Restart MCP server`,
                 ],
-                setup_command: {
-                  claude_code: `claude mcp update whales-market --env WM_AGENT_PRIVATE_KEY=$(cat ${keyFile}) --env WM_WALLET_TYPE=evm --env WM_DAILY_LIMIT=200 --env WM_SPEND_LIMIT_PER_TX=50`,
-                },
                 safety: {
-                  per_tx_limit: '$50 (configurable via WM_SPEND_LIMIT_PER_TX)',
-                  daily_limit: '$200 (configurable via WM_DAILY_LIMIT)',
-                  tip: 'Only deposit what you can afford to lose. This is a dedicated agent wallet.',
+                  per_tx_limit: '$50 (AT_SPEND_LIMIT_PER_TX)',
+                  daily_limit: '$200 (AT_DAILY_LIMIT)',
                 },
               }),
             };
@@ -411,26 +406,23 @@ function createServer(): McpServer {
         // Guide
         return {
           content: formatResult({
-            guide: 'Whales Market MCP Wallet Setup',
+            guide: 'agent-trade Wallet Setup',
+            venues: registry.list().map((a) => ({ name: a.name, displayName: a.displayName, configured: a.isConfigured() })),
             modes: {
               user_mode: {
                 description: 'Read-only. View portfolio, offers, orders. Cannot trade.',
-                env: 'WM_WALLET_ADDRESS=<your wallet address>',
-                use_case: 'Monitor your positions without risk',
+                env: 'AT_WALLET_ADDRESS=<your wallet address>',
               },
               agent_mode: {
                 description: 'Full autonomous trading. Agent signs transactions automatically.',
-                env: 'WM_AGENT_PRIVATE_KEY=<private key>',
-                use_case: 'Let AI trade on your behalf with safety limits',
+                env: 'AT_AGENT_PRIVATE_KEY=<private key>',
                 safety: [
                   'Use a DEDICATED wallet (not your main wallet)',
-                  'Set spend limits: WM_SPEND_LIMIT_PER_TX (default $50)',
-                  'Set daily cap: WM_DAILY_LIMIT (default $200)',
-                  'Only deposit what you can afford to lose',
+                  'Set spend limits: AT_SPEND_LIMIT_PER_TX (default $50)',
+                  'Set daily cap: AT_DAILY_LIMIT (default $200)',
                 ],
               },
             },
-            recommendation: 'Start with user_mode to monitor. Switch to agent_mode when comfortable.',
           }),
         };
       } catch (error) {
@@ -439,343 +431,26 @@ function createServer(): McpServer {
     },
   );
 
-  // ── Tool 12: get_order_book ─────────────────────────────
+  // ── Register custom tools from adapters ────────────────
 
-  server.tool(
-    'get_order_book',
-    'Get the order book for a token: buy/sell offers sorted by price, spread, and depth.',
-    {
-      symbol: z.string().describe('Token symbol (e.g., "HYPE", "PENGU")'),
-      depth: z.number().optional().describe('Number of price levels per side (default: 10)'),
-    },
-    async ({ symbol, depth }) => {
-      try {
-        const response = await api.getOffers({
-          symbol,
-          token_id: undefined,
-          offer_type: undefined,
-          status: 'open',
-          page: 1,
-          take: 200,
-        });
-
-        // Extract offers list from response
-        let offers: Record<string, unknown>[] = [];
-        const res = response as Record<string, unknown>;
-        if (res.data && typeof res.data === 'object' && 'list' in (res.data as Record<string, unknown>)) {
-          offers = (res.data as Record<string, unknown>).list as Record<string, unknown>[];
-        } else if (Array.isArray(res.data)) {
-          offers = res.data as Record<string, unknown>[];
-        } else if (Array.isArray(res.list)) {
-          offers = res.list as Record<string, unknown>[];
-        }
-
-        // Filter by symbol
-        const symbolUpper = symbol.toUpperCase();
-        const filtered = offers.filter((o) => {
-          const tokenSymbol = String(o.token_symbol || o.symbol || '').toUpperCase();
-          return tokenSymbol === symbolUpper;
-        });
-
-        const book = buildOrderBook(filtered, symbolUpper, depth ?? 10);
-        return { content: formatResult(book) };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 13: get_my_offers ──────────────────────────────
-
-  server.tool(
-    'get_my_offers',
-    'Get your open/filled offers on Whales Market. Requires wallet config and symbol.',
-    {
-      symbol: z.string().describe('Token symbol (required by API)'),
-      page: z.number().optional().describe('Page number'),
-      take: z.number().optional().describe('Items per page (default: 20)'),
-    },
-    async (params) => {
-      try {
-        const address = wallet.getAddress();
-        const result = await api.getOffersByAddress(address, params);
-        return { content: formatResult(result) };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 14: get_my_orders ──────────────────────────────
-
-  server.tool(
-    'get_my_orders',
-    'Get your orders on Whales Market. Requires wallet config (WM_AGENT_PRIVATE_KEY or WM_WALLET_ADDRESS).',
-    {
-      page: z.number().optional().describe('Page number'),
-      take: z.number().optional().describe('Items per page (default: 20)'),
-    },
-    async (params) => {
-      try {
-        const address = wallet.getAddress();
-        const result = await api.getOrdersByAddress(address, params);
-        return { content: formatResult(result) };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 15: get_my_portfolio ───────────────────────────
-
-  server.tool(
-    'get_my_portfolio',
-    'Get portfolio summary: offers, orders, positions count. Requires wallet config and symbol.',
-    {
-      symbol: z.string().describe('Token symbol (required by API)'),
-    },
-    async ({ symbol }) => {
-      try {
-        const address = wallet.getAddress();
-
-        const [offersRes, ordersRes] = await Promise.all([
-          api.getOffersByAddress(address, { symbol }).catch(() => ({ data: [] })),
-          api.getOrdersByAddress(address).catch(() => ({ data: [] })),
-        ]);
-
-        const offers = (offersRes as Record<string, unknown>).data;
-        const orders = (ordersRes as Record<string, unknown>).data;
-        const offersList = Array.isArray(offers) ? offers : [];
-        const ordersList = Array.isArray(orders) ? orders : [];
-
-        const openOffers = offersList.filter((o: Record<string, unknown>) => o.status === 'open').length;
-        const filledOrders = ordersList.filter((o: Record<string, unknown>) => o.status === 'filled').length;
-
-        return {
-          content: formatResult({
-            address,
-            totalOffers: offersList.length,
-            totalOrders: ordersList.length,
-            openOffers,
-            filledOrders,
-            offers: offersList,
-            orders: ordersList,
-          }),
-        };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 16: get_balance ────────────────────────────────
-
-  server.tool(
-    'get_balance',
-    'Get on-chain balance of a wallet. Defaults to configured wallet address. Supports Solana (SOL) and EVM (ETH).',
-    {
-      address: z.string().optional().describe('Wallet address (defaults to configured wallet)'),
-    },
-    async ({ address }) => {
-      try {
-        const result = await wallet.getBalance(address);
-        return { content: formatResult(result) };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 17: get_networks ──────────────────────────────
-
-  server.tool(
-    'get_networks',
-    'List supported blockchain networks on Whales Market.',
-    {},
-    async () => {
-      try {
-        const result = await api.getNetworkChains();
-        return { content: formatResult(result) };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 18: create_buy_intent ──────────────────────────
-
-  server.tool(
-    'create_buy_intent',
-    'Create a buy offer on Whales Market. Agent mode: validates limits, signs, and executes. User mode: returns preview. Requires wallet config.',
-    {
-      symbol: z.string().describe('Token symbol'),
-      amount: z.number().positive().describe('Amount of tokens to buy'),
-      price: z.number().positive().describe('Price per token in USD'),
-      dry_run: z.boolean().optional().describe('If true, returns preview without executing (default: false)'),
-    },
-    async ({ symbol, amount, price, dry_run }) => {
-      try {
-        const result = await executeTradeIntent(api, wallet, {
-          symbol,
-          amount,
-          price,
-          side: 'buy',
-          totalValue: amount * price,
-          dryRun: dry_run ?? false,
-        });
-        return {
-          content: formatResult(result),
-          ...(result.success ? {} : { isError: true as const }),
-        };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 19: create_sell_intent ─────────────────────────
-
-  server.tool(
-    'create_sell_intent',
-    'Create a sell offer on Whales Market. Agent mode: validates limits, signs, and executes. User mode: returns preview. Requires wallet config.',
-    {
-      symbol: z.string().describe('Token symbol'),
-      amount: z.number().positive().describe('Amount of tokens to sell'),
-      price: z.number().positive().describe('Price per token in USD'),
-      dry_run: z.boolean().optional().describe('If true, returns preview without executing (default: false)'),
-    },
-    async ({ symbol, amount, price, dry_run }) => {
-      try {
-        const result = await executeTradeIntent(api, wallet, {
-          symbol,
-          amount,
-          price,
-          side: 'sell',
-          totalValue: amount * price,
-          dryRun: dry_run ?? false,
-        });
-        return {
-          content: formatResult(result),
-          ...(result.success ? {} : { isError: true as const }),
-        };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 20: react_to_offer ─────────────────────────────
-
-  server.tool(
-    'react_to_offer',
-    'Accept/fill an existing offer on Whales Market. Agent mode: signs and executes. User mode: returns preview. Requires wallet config. For EVM chains, provide chain_id or symbol to auto-detect.',
-    {
-      offer_id: z.string().describe('Offer ID to react to'),
-      amount: z.number().positive().optional().describe('Amount for partial fill (omit for full fill)'),
-      dry_run: z.boolean().optional().describe('If true, returns preview without executing (default: false)'),
-      chain_id: z.number().optional().describe('Chain ID for EVM offers (auto-detected from symbol if provided)'),
-      symbol: z.string().optional().describe('Token symbol — used to auto-detect chain if chain_id not provided'),
-    },
-    async ({ offer_id, amount, dry_run, chain_id, symbol }) => {
-      try {
-        // Auto-detect chain from symbol if chain_id not provided
-        let resolvedChainId = chain_id;
-        if (!resolvedChainId && symbol) {
+  for (const adapter of registry.getConfigured()) {
+    const customTools = adapter.getCustomTools?.() || [];
+    for (const tool of customTools) {
+      server.tool(
+        tool.name,
+        tool.description,
+        {},
+        async () => {
           try {
-            const chainInfo = await resolveTokenChainInfo(api, symbol);
-            resolvedChainId = chainInfo.chainId;
-          } catch { /* fall through to default Solana path */ }
-        }
-        const result = await reactToOffer(api, wallet, offer_id, amount, dry_run ?? false, resolvedChainId);
-        return {
-          content: formatResult(result),
-          ...(result.success ? {} : { isError: true as const }),
-        };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 21: cancel_offer ──────────────────────────────
-
-  server.tool(
-    'cancel_offer',
-    'Cancel your own offer on Whales Market. Agent mode: signs and executes. User mode: returns preview. Requires wallet config. For EVM chains, provide chain_id or symbol to auto-detect.',
-    {
-      offer_id: z.string().describe('Offer ID to cancel'),
-      dry_run: z.boolean().optional().describe('If true, returns preview without executing (default: false)'),
-      chain_id: z.number().optional().describe('Chain ID for EVM offers (auto-detected from symbol if provided)'),
-      symbol: z.string().optional().describe('Token symbol — used to auto-detect chain if chain_id not provided'),
-    },
-    async ({ offer_id, dry_run, chain_id, symbol }) => {
-      try {
-        let resolvedChainId = chain_id;
-        if (!resolvedChainId && symbol) {
-          try {
-            const chainInfo = await resolveTokenChainInfo(api, symbol);
-            resolvedChainId = chainInfo.chainId;
-          } catch { /* fall through to default Solana path */ }
-        }
-        const result = await cancelOffer(api, wallet, offer_id, dry_run ?? false, resolvedChainId);
-        return {
-          content: formatResult(result),
-          ...(result.success ? {} : { isError: true as const }),
-        };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 21b: cancel_order ─────────────────────────────
-
-  server.tool(
-    'cancel_order',
-    'Cancel an unfilled order on Whales Market. Calls settleCancelled on-chain. Agent mode: signs and executes. For EVM chains, provide chain_id or symbol.',
-    {
-      order_id: z.string().describe('Order ID to cancel'),
-      dry_run: z.boolean().optional().describe('If true, returns preview without executing (default: false)'),
-      chain_id: z.number().optional().describe('Chain ID for EVM orders (auto-detected from symbol if provided)'),
-      symbol: z.string().optional().describe('Token symbol — used to auto-detect chain if chain_id not provided'),
-    },
-    async ({ order_id, dry_run, chain_id, symbol }) => {
-      try {
-        let resolvedChainId = chain_id;
-        if (!resolvedChainId && symbol) {
-          try {
-            const chainInfo = await resolveTokenChainInfo(api, symbol);
-            resolvedChainId = chainInfo.chainId;
-          } catch { /* fall through to default Solana path */ }
-        }
-        const result = await cancelOrder(api, wallet, order_id, dry_run ?? false, resolvedChainId);
-        return {
-          content: formatResult(result),
-          ...(result.success ? {} : { isError: true as const }),
-        };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
-
-  // ── Tool 22: check_intent_status ────────────────────────
-
-  server.tool(
-    'check_intent_status',
-    'Check the status of a previously created intent/offer on Whales Market.',
-    {
-      offer_id: z.string().describe('Offer ID to check'),
-    },
-    async ({ offer_id }) => {
-      try {
-        const result = await api.getOfferDetail(offer_id);
-        return { content: formatResult(result) };
-      } catch (error) {
-        return handleError(error);
-      }
-    },
-  );
+            const result = await tool.handler({});
+            return { content: formatResult(result) };
+          } catch (error) {
+            return handleError(error);
+          }
+        },
+      );
+    }
+  }
 
   return server;
 }
@@ -796,33 +471,30 @@ async function startStdioServer() {
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`whales-market-mcp running on stdio (API: ${API_URL})`);
+  const venues = registry.getConfigured().map((a) => a.name).join(', ');
+  console.error(`agent-trade running on stdio (venues: ${venues})`);
 }
 
 async function startHttpServer(port: number) {
   const { default: express } = await import('express');
   const { default: cors } = await import('cors');
 
-  const host = process.env.MCP_HTTP_HOST || '127.0.0.1'; // localhost only by default for security
+  const host = process.env.MCP_HTTP_HOST || '127.0.0.1';
   const app = express();
   app.use(cors());
   app.use(express.json());
 
-  // Session management: map sessionId → transport
   const transports: Record<string, StreamableHTTPServerTransport> = {};
 
-  // POST /mcp — main JSON-RPC endpoint
   app.post('/mcp', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     try {
-      // Reuse existing session
       if (sessionId && transports[sessionId]) {
         await transports[sessionId].handleRequest(req, res, req.body);
         return;
       }
 
-      // New initialization request
       if (!sessionId && isInitializeRequest(req.body)) {
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
@@ -846,7 +518,6 @@ async function startHttpServer(port: number) {
         return;
       }
 
-      // Invalid request
       res.status(400).json({
         jsonrpc: '2.0',
         error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
@@ -864,7 +535,6 @@ async function startHttpServer(port: number) {
     }
   });
 
-  // GET /mcp — SSE stream for server-initiated messages
   app.get('/mcp', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     if (!sessionId || !transports[sessionId]) {
@@ -874,7 +544,6 @@ async function startHttpServer(port: number) {
     await transports[sessionId].handleRequest(req, res);
   });
 
-  // DELETE /mcp — session termination
   app.delete('/mcp', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     if (!sessionId || !transports[sessionId]) {
@@ -884,22 +553,16 @@ async function startHttpServer(port: number) {
     await transports[sessionId].handleRequest(req, res);
   });
 
-  // Health check — ping Whales Market API
   app.get('/health', async (_req, res) => {
-    try {
-      await api.getMarketStats();
-      res.json({ status: 'ok', transport: 'http', api: API_URL });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(503).json({ status: 'error', transport: 'http', api: API_URL, error: message });
-    }
+    const venues = registry.getConfigured().map((a) => a.name);
+    res.json({ status: 'ok', transport: 'http', venues });
   });
 
   app.listen(port, host, () => {
-    console.error(`whales-market-mcp running on http://${host}:${port}/mcp (API: ${API_URL})`);
+    const venues = registry.getConfigured().map((a) => a.name).join(', ');
+    console.error(`agent-trade running on http://${host}:${port}/mcp (venues: ${venues})`);
   });
 
-  // Graceful shutdown
   process.on('SIGINT', async () => {
     console.error('Shutting down...');
     for (const sid of Object.keys(transports)) {

@@ -40,7 +40,7 @@ export function getNetworkConfig(): {
   return {
     programId: process.env.WM_PROGRAM_ID || (isDevnet ? DEVNET_PROGRAM_ID : MAINNET_PROGRAM_ID),
     configAccount: process.env.WM_CONFIG_ACCOUNT || (isDevnet ? DEVNET_CONFIG_ACCOUNT : MAINNET_CONFIG_ACCOUNT),
-    rpcUrl: process.env.WM_SOLANA_RPC || (isDevnet ? DEVNET_RPC : MAINNET_RPC),
+    rpcUrl: process.env.AT_SOLANA_RPC || process.env.WM_SOLANA_RPC || (isDevnet ? DEVNET_RPC : MAINNET_RPC),
     isDevnet,
   };
 }

@@ -586,9 +586,9 @@ const _instances: Map<number, EvmTrading> = new Map();
 export function getEvmTrading(chainId: number): EvmTrading {
   let instance = _instances.get(chainId);
   if (!instance) {
-    const privateKey = process.env.WM_AGENT_PRIVATE_KEY;
+    const privateKey = process.env.AT_AGENT_PRIVATE_KEY || process.env.WM_AGENT_PRIVATE_KEY;
     if (!privateKey) {
-      throw new Error('WM_AGENT_PRIVATE_KEY not set — cannot create EVM trading instance');
+      throw new Error('AT_AGENT_PRIVATE_KEY not set — cannot create EVM trading instance');
     }
     instance = new EvmTrading(privateKey, chainId);
     _instances.set(chainId, instance);

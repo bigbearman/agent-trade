@@ -1,11 +1,11 @@
 {
-  "name": "whales-market-mcp",
-  "version": "1.0.3",
-  "description": "MCP Server for Whales Market - OTC trading platform for pre-market tokens, points, and allocations",
+  "name": "agent-trade",
+  "version": "0.1.0",
+  "description": "MCP server for AI agent trading — any agent, any venue",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "whales-market-mcp": "dist/index.js"
+    "agent-trade": "dist/index.js"
   },
   "files": [
     "dist/**/*",
@@ -22,14 +22,11 @@
   },
   "keywords": [
     "mcp",
-    "model-context-protocol",
-    "whales-market",
-    "otc",
-    "pre-market",
-    "crypto",
-    "ai",
-    "claude",
-    "cursor"
+    "ai-agent",
+    "trading",
+    "polymarket",
+    "defi",
+    "prediction-market"
   ],
   "author": {
     "name": "Whales Market",

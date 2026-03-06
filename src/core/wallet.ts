@@ -1,96 +1,13 @@
+// WalletManager — shared across all adapters
+
 import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Wallet, JsonRpcProvider } from 'ethers';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { getNetworkConfig } from './constants.js';
-import type { WalletType, WalletMode, WalletConfig, WalletStatus, SpendRecord } from './types.js';
+import type { WalletType, WalletMode, WalletConfig, WalletStatus } from './types.js';
+import { SpendTracker } from './safety.js';
 
 const VALID_WALLET_TYPES = ['solana', 'evm'] as const;
-
-// ── Spend Tracker (persistent to disk) ───────────────────
-
-class SpendTracker {
-  private record: SpendRecord = { date: '', total: 0 };
-  private readonly filePath: string;
-  private lock = false;
-
-  constructor() {
-    const dataDir = process.env.WM_DATA_DIR || join(process.env.HOME || '/tmp', '.whales-market-mcp');
-    try { mkdirSync(dataDir, { recursive: true }); } catch { /* ignore */ }
-    this.filePath = join(dataDir, 'spend-tracker.json');
-    this.load();
-  }
-
-  private load(): void {
-    try {
-      const data = readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(data);
-      if (parsed.date && typeof parsed.total === 'number') {
-        this.record = parsed;
-      }
-    } catch {
-      // File doesn't exist or corrupted — start fresh
-    }
-  }
-
-  private save(): void {
-    try {
-      writeFileSync(this.filePath, JSON.stringify(this.record), 'utf-8');
-    } catch {
-      // Best effort — log but don't crash
-      console.error('[SpendTracker] Failed to persist spend data');
-    }
-  }
-
-  private todayKey(): string {
-    return new Date().toISOString().slice(0, 10);
-  }
-
-  getSpent(): number {
-    if (this.record.date !== this.todayKey()) {
-      this.record = { date: this.todayKey(), total: 0 };
-      this.save();
-    }
-    return this.record.total;
-  }
-
-  /**
-   * Atomic check-and-add: returns true if amount was within limits and recorded.
-   * Prevents race condition where parallel calls all pass limit check.
-   */
-  tryAdd(amount: number, dailyLimit: number): { success: boolean; newTotal: number } {
-    if (this.lock) {
-      return { success: false, newTotal: this.record.total };
-    }
-    this.lock = true;
-    try {
-      if (this.record.date !== this.todayKey()) {
-        this.record = { date: this.todayKey(), total: 0 };
-      }
-      if (this.record.total + amount > dailyLimit) {
-        return { success: false, newTotal: this.record.total };
-      }
-      this.record.total += amount;
-      this.save();
-      return { success: true, newTotal: this.record.total };
-    } finally {
-      this.lock = false;
-    }
-  }
-
-  add(amount: number): void {
-    if (this.record.date !== this.todayKey()) {
-      this.record = { date: this.todayKey(), total: 0 };
-    }
-    this.record.total += amount;
-    this.save();
-  }
-}
-
-// ── Wallet Manager ───────────────────────────────────────
 
 export class WalletManager {
   private readonly privateKey: string | undefined;
@@ -102,28 +19,28 @@ export class WalletManager {
   readonly spendTracker = new SpendTracker();
 
   constructor() {
-    this.privateKey = process.env.WM_AGENT_PRIVATE_KEY;
+    this.privateKey = process.env.AT_AGENT_PRIVATE_KEY || process.env.WM_AGENT_PRIVATE_KEY;
 
     // Validate wallet type
-    const rawType = (process.env.WM_WALLET_TYPE || 'solana').toLowerCase();
+    const rawType = (process.env.AT_WALLET_TYPE || process.env.WM_WALLET_TYPE || 'solana').toLowerCase();
     if (!VALID_WALLET_TYPES.includes(rawType as typeof VALID_WALLET_TYPES[number])) {
-      console.error(`[WalletManager] Invalid WM_WALLET_TYPE="${rawType}", falling back to "solana". Valid: ${VALID_WALLET_TYPES.join(', ')}`);
+      console.error(`[WalletManager] Invalid wallet type="${rawType}", falling back to "solana". Valid: ${VALID_WALLET_TYPES.join(', ')}`);
     }
     this.walletType = (VALID_WALLET_TYPES.includes(rawType as typeof VALID_WALLET_TYPES[number]) ? rawType : 'solana') as WalletType;
 
-    this.walletAddress = process.env.WM_WALLET_ADDRESS;
+    this.walletAddress = process.env.AT_WALLET_ADDRESS || process.env.WM_WALLET_ADDRESS;
     this.mode = this.privateKey ? 'agent' : 'user';
 
     // Validate spend limits — NaN falls back to defaults
-    const parsedPerTx = parseFloat(process.env.WM_SPEND_LIMIT_PER_TX || '50');
-    const parsedDaily = parseFloat(process.env.WM_DAILY_LIMIT || '200');
+    const parsedPerTx = parseFloat(process.env.AT_SPEND_LIMIT_PER_TX || process.env.WM_SPEND_LIMIT_PER_TX || '50');
+    const parsedDaily = parseFloat(process.env.AT_DAILY_LIMIT || process.env.WM_DAILY_LIMIT || '200');
     this.spendLimitPerTx = Number.isFinite(parsedPerTx) && parsedPerTx > 0 ? parsedPerTx : 50;
     this.dailyLimit = Number.isFinite(parsedDaily) && parsedDaily > 0 ? parsedDaily : 200;
     if (!Number.isFinite(parsedPerTx) || parsedPerTx <= 0) {
-      console.error(`[WalletManager] Invalid WM_SPEND_LIMIT_PER_TX, using default $50`);
+      console.error(`[WalletManager] Invalid spend limit per tx, using default $50`);
     }
     if (!Number.isFinite(parsedDaily) || parsedDaily <= 0) {
-      console.error(`[WalletManager] Invalid WM_DAILY_LIMIT, using default $200`);
+      console.error(`[WalletManager] Invalid daily limit, using default $200`);
     }
   }
 
@@ -157,22 +74,22 @@ export class WalletManager {
     if (this.walletAddress) {
       return this.walletAddress;
     }
-    throw new Error('No wallet configured. Set WM_AGENT_PRIVATE_KEY (agent mode) or WM_WALLET_ADDRESS (user mode).');
+    throw new Error('No wallet configured. Set AT_AGENT_PRIVATE_KEY (agent mode) or AT_WALLET_ADDRESS (user mode).');
   }
 
   hasWallet(): boolean {
     return !!(this.privateKey || this.walletAddress);
   }
 
-  /**
-   * Get private key for signing. Only available in agent mode.
-   * Used internally by solana-trading.ts — avoids duplicate env reads.
-   */
   getPrivateKey(): string {
     if (!this.privateKey) {
-      throw new Error('No private key available (user mode). Set WM_AGENT_PRIVATE_KEY for agent mode.');
+      throw new Error('No private key available (user mode). Set AT_AGENT_PRIVATE_KEY for agent mode.');
     }
     return this.privateKey;
+  }
+
+  getWalletType(): WalletType {
+    return this.walletType;
   }
 
   private deriveAddress(key: string): string {
@@ -205,13 +122,13 @@ export class WalletManager {
     const addr = address || this.getAddress();
 
     if (this.walletType === 'solana') {
-      const { rpcUrl } = getNetworkConfig();
+      const rpcUrl = process.env.AT_SOLANA_RPC || process.env.WM_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
       const connection = new Connection(rpcUrl);
       const pubkey = new PublicKey(addr);
       const lamports = await connection.getBalance(pubkey);
       return { balance: lamports / LAMPORTS_PER_SOL, unit: 'SOL', address: addr };
     } else {
-      const rpcUrl = process.env.WM_EVM_RPC || process.env.EVM_RPC_URL || 'https://eth.llamarpc.com';
+      const rpcUrl = process.env.AT_EVM_RPC || process.env.WM_EVM_RPC || process.env.EVM_RPC_URL || 'https://eth.llamarpc.com';
       const provider = new JsonRpcProvider(rpcUrl);
       const wei = await provider.getBalance(addr);
       const ethBalance = Number(wei) / 1e18;
@@ -219,8 +136,7 @@ export class WalletManager {
     }
   }
 
-  // ── Spend Limit Checks ────────────────────────────────
-
+  // Spend limit checks
   checkSpendLimits(valueUsd: number): { allowed: boolean; reason?: string } {
     if (valueUsd > this.spendLimitPerTx) {
       return {
@@ -240,10 +156,6 @@ export class WalletManager {
     return { allowed: true };
   }
 
-  /**
-   * Atomic check-and-record: checks limits AND records spend in one operation.
-   * Prevents race condition where parallel calls bypass daily limit.
-   */
   checkAndRecordSpend(valueUsd: number): { allowed: boolean; reason?: string } {
     if (valueUsd > this.spendLimitPerTx) {
       return {
