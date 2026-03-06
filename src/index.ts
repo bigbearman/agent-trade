@@ -441,13 +441,21 @@ function createServer(): McpServer {
   for (const adapter of registry.getConfigured()) {
     const customTools = adapter.getCustomTools?.() || [];
     for (const tool of customTools) {
+      // Convert plain schema to zod schema for MCP SDK compatibility
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const zodSchema: Record<string, any> = {};
+      for (const [key, def] of Object.entries(tool.schema || {})) {
+        const d = def as { type?: string; description?: string };
+        const base = d.type === 'number' ? z.coerce.number() : z.string();
+        zodSchema[key] = d.description ? base.optional().describe(d.description) : base.optional();
+      }
       server.tool(
         tool.name,
         tool.description,
-        {},
-        async () => {
+        zodSchema,
+        async (params: Record<string, unknown>) => {
           try {
-            const result = await tool.handler({});
+            const result = await tool.handler(params);
             return { content: formatResult(result) };
           } catch (error) {
             return handleError(error);

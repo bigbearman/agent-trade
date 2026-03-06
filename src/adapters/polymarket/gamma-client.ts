@@ -8,6 +8,7 @@ const GAMMA_API_BASE = 'https://gamma-api.polymarket.com';
 
 export class GammaClient {
   private http: AxiosInstance;
+  private clobHttp!: AxiosInstance;
 
   constructor(baseUrl?: string) {
     this.http = axios.create({
@@ -71,5 +72,60 @@ export class GammaClient {
   async getTags(): Promise<GammaTag[]> {
     const { data } = await this.http.get<GammaTag[]>('/tags');
     return data;
+  }
+
+  // ── CLOB Public Endpoints (no auth) ───────────────────
+
+  private getClobHttp(): AxiosInstance {
+    if (!this.clobHttp) {
+      this.clobHttp = axios.create({
+        baseURL: 'https://clob.polymarket.com',
+        timeout: 30000,
+      });
+    }
+    return this.clobHttp;
+  }
+
+  /**
+   * Get real order book from CLOB (public, no auth needed)
+   */
+  async getClobOrderBook(tokenId: string): Promise<{ bids: Array<{ price: string; size: string }>; asks: Array<{ price: string; size: string }> }> {
+    const { data } = await this.getClobHttp().get('/book', {
+      params: { token_id: tokenId },
+    });
+    return data;
+  }
+
+  /**
+   * Get midpoint price from CLOB (public)
+   */
+  async getClobMidpoint(tokenId: string): Promise<string> {
+    const { data } = await this.getClobHttp().get('/midpoint', {
+      params: { token_id: tokenId },
+    });
+    return data?.mid || '0';
+  }
+
+  /**
+   * Get last trade price from CLOB (public)
+   */
+  async getClobLastTrade(tokenId: string): Promise<{ price: string; side: string }> {
+    const { data } = await this.getClobHttp().get('/last-trade-price', {
+      params: { token_id: tokenId },
+    });
+    return data;
+  }
+
+  /**
+   * Get price history from CLOB (public)
+   * @param tokenId - market token ID
+   * @param interval - time range: 1d, 1w, 1m, 3m, max
+   * @param fidelity - data point interval in minutes (e.g., 60 = hourly)
+   */
+  async getClobPriceHistory(tokenId: string, interval = '1w', fidelity = 60): Promise<Array<{ t: number; p: number }>> {
+    const { data } = await this.getClobHttp().get('/prices-history', {
+      params: { market: tokenId, interval, fidelity },
+    });
+    return data?.history || [];
   }
 }

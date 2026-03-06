@@ -7,6 +7,15 @@ import { PolymarketClobWrapper } from './clob-client.js';
 import { getPolymarketConfig } from './types.js';
 import type { GammaMarket } from './types.js';
 
+function parseClobTokenIds(market: GammaMarket): string[] {
+  if (Array.isArray(market.clobTokenIds)) return market.clobTokenIds;
+  try {
+    return JSON.parse(market.clobTokenIds as string) as string[];
+  } catch {
+    return [];
+  }
+}
+
 function parseOutcomePrices(market: GammaMarket): { yes: number; no: number } {
   try {
     const prices = JSON.parse(market.outcomePrices) as string[];
@@ -113,8 +122,8 @@ export class PolymarketAdapter implements TradingAdapter {
         parsedPrices: prices,
         venue: 'polymarket',
         tokenIds: {
-          yes: market.clobTokenIds?.[0],
-          no: market.clobTokenIds?.[1],
+          yes: parseClobTokenIds(market)?.[0],
+          no: parseClobTokenIds(market)?.[1],
         },
       };
     }
@@ -122,36 +131,32 @@ export class PolymarketAdapter implements TradingAdapter {
   }
 
   async getOrderBook(marketId: string, depth?: number): Promise<{ bids: OrderBookEntry[]; asks: OrderBookEntry[] }> {
-    if (!this.clob) {
-      // Try to get market data from Gamma and show implied prices
-      const market = await this.gamma.getMarketBySlug(marketId);
-      if (market) {
-        const prices = parseOutcomePrices(market);
-        const yesTokenId = market.clobTokenIds?.[0];
-        return {
-          bids: yesTokenId ? [{
-            id: 'implied-yes',
-            price: prices.yes,
-            size: market.liquidity || 0,
-            filled: 0,
-            remaining: market.liquidity || 0,
-            side: 'buy' as const,
-          }] : [],
-          asks: [],
-        };
-      }
-      return { bids: [], asks: [] };
-    }
-
     // Resolve token ID from slug
     const market = await this.gamma.getMarketBySlug(marketId);
-    if (!market || !market.clobTokenIds?.length) {
+    if (!market || !parseClobTokenIds(market)?.length) {
       return { bids: [], asks: [] };
     }
 
-    // Get order book for YES token
-    const yesTokenId = market.clobTokenIds[0];
-    const book = await this.clob.getOrderBook(yesTokenId);
+    // Use CLOB public endpoint (no auth needed) for real order book
+    const yesTokenId = parseClobTokenIds(market)[0];
+    let book: { bids: Array<{ price: string; size: string }>; asks: Array<{ price: string; size: string }> };
+    try {
+      book = await this.gamma.getClobOrderBook(yesTokenId);
+    } catch {
+      // Fallback to implied prices from Gamma
+      const prices = parseOutcomePrices(market);
+      return {
+        bids: [{
+          id: 'implied-yes',
+          price: prices.yes,
+          size: parseFloat(String(market.liquidity || 0)),
+          filled: 0,
+          remaining: parseFloat(String(market.liquidity || 0)),
+          side: 'buy' as const,
+        }],
+        asks: [],
+      };
+    }
     const maxDepth = depth ?? 10;
 
     const bids: OrderBookEntry[] = (book.bids || [])
@@ -188,8 +193,8 @@ export class PolymarketAdapter implements TradingAdapter {
     let assetId: string | undefined;
     if (marketId) {
       const market = await this.gamma.getMarketBySlug(marketId);
-      if (market?.clobTokenIds?.length) {
-        assetId = market.clobTokenIds[0];
+      if (market && parseClobTokenIds(market)?.length) {
+        assetId = parseClobTokenIds(market)[0];
       }
     }
 
@@ -229,12 +234,12 @@ export class PolymarketAdapter implements TradingAdapter {
 
       // Resolve market to token ID
       const market = await this.gamma.getMarketBySlug(market_id);
-      if (!market?.clobTokenIds?.length) {
+      if (!market || !parseClobTokenIds(market)?.length) {
         return { ...baseResult, success: false, error: `Market not found: ${market_id}` };
       }
 
       // For buy side, use YES token; for sell, also YES token (selling YES position)
-      const tokenId = market.clobTokenIds[0];
+      const tokenId = parseClobTokenIds(market)[0];
 
       try {
         const result = await this.clob.createAndPostOrder({
@@ -328,8 +333,8 @@ export class PolymarketAdapter implements TradingAdapter {
             ...m,
             parsedPrices: parseOutcomePrices(m),
             tokenIds: {
-              yes: m.clobTokenIds?.[0],
-              no: m.clobTokenIds?.[1],
+              yes: parseClobTokenIds(m)?.[0],
+              no: parseClobTokenIds(m)?.[1],
             },
           }));
           return { ...event, markets: enrichedMarkets };
@@ -357,6 +362,66 @@ export class PolymarketAdapter implements TradingAdapter {
           } catch (error) {
             return { error: `Failed to derive API key: ${error instanceof Error ? error.message : String(error)}` };
           }
+        },
+      },
+      {
+        name: 'pm_price_history',
+        description: 'Get price history for a Polymarket market. Returns time series data for trend analysis.',
+        schema: {
+          slug: { type: 'string', description: 'Market slug (e.g., "russia-ukraine-ceasefire-before-gta-vi-554")' },
+          interval: { type: 'string', description: 'Time range: 1d, 1w, 1m, 3m, max (default: 1w)' },
+          fidelity: { type: 'number', description: 'Data point interval in minutes: 1, 5, 15, 60, 360, 1440 (default: 60)' },
+        },
+        handler: async (params) => {
+          const slug = params.slug as string;
+          if (!slug) return { error: 'slug parameter is required' };
+
+          const market = await this.gamma.getMarketBySlug(slug);
+          if (!market || !parseClobTokenIds(market)?.length) {
+            return { error: `Market not found: ${slug}` };
+          }
+
+          const tokenId = parseClobTokenIds(market)[0];
+          const interval = (params.interval as string) || '1w';
+          const fidelity = (params.fidelity as number) || 60;
+
+          const history = await this.gamma.getClobPriceHistory(tokenId, interval, fidelity);
+
+          // Get current midpoint and last trade
+          const [midpoint, lastTrade] = await Promise.all([
+            this.gamma.getClobMidpoint(tokenId).catch(() => '0'),
+            this.gamma.getClobLastTrade(tokenId).catch(() => ({ price: '0', side: '' })),
+          ]);
+
+          // Calculate basic stats
+          const prices = history.map((h) => h.p);
+          const high = prices.length > 0 ? Math.max(...prices) : 0;
+          const low = prices.length > 0 ? Math.min(...prices) : 0;
+          const first = prices[0] || 0;
+          const last = prices[prices.length - 1] || 0;
+          const change = first > 0 ? ((last - first) / first) * 100 : 0;
+
+          return {
+            market: market.question,
+            slug: market.slug,
+            interval,
+            fidelity_minutes: fidelity,
+            current: {
+              midpoint: parseFloat(midpoint),
+              last_trade: parseFloat(lastTrade.price),
+              last_side: lastTrade.side,
+            },
+            stats: {
+              high,
+              low,
+              change_pct: Math.round(change * 100) / 100,
+              data_points: history.length,
+            },
+            history: history.map((h) => ({
+              time: new Date(h.t * 1000).toISOString(),
+              price: h.p,
+            })),
+          };
         },
       },
     ];

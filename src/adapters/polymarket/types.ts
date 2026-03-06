@@ -23,7 +23,7 @@ export interface GammaMarket {
   question: string;
   slug: string;
   conditionId: string;
-  clobTokenIds: string[];
+  clobTokenIds: string[] | string; // API returns JSON string, needs parsing
   outcomePrices: string;
   outcomes: string;
   volume: number;
