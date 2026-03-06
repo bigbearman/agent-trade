@@ -1,238 +1,221 @@
-# whales-market-mcp — Whales Market MCP Server
+# agent-trade
 
-[MCP](https://modelcontextprotocol.io) server for [Whales Market](https://whales.market) — the OTC trading platform for pre-market tokens, points, and allocations.
+**MCP server for AI agent trading — any agent, any venue.**
 
-Query market data, token prices, offers, trades, wallet info, and execute trades directly from your AI assistant.
+Give your AI agent the ability to trade across prediction markets, pre-markets, and DEXs through a single [Model Context Protocol](https://modelcontextprotocol.io) server.
 
----
+## Features
 
-## Quick Install
+- 🔌 **Multi-venue** — One MCP server, multiple trading venues
+- 🤖 **Agent Mode** — Auto-sign trades with a dedicated wallet
+- 👤 **User Mode** — Preview trades, sign manually
+- 🛡️ **Safety built-in** — Spend limits, price sanity checks, persistent tracking
+- 🔗 **Multi-chain** — Solana, Polygon, 20+ EVM chains
+- 📖 **Read-only works instantly** — No API keys needed for market data
 
-### Claude Code (CLI)
+## Supported Venues
+
+| Venue | Type | Read | Trade | Chain |
+|-------|------|------|-------|-------|
+| [Polymarket](https://polymarket.com) | Prediction Market | ✅ | ✅ | Polygon |
+| [Whales Market](https://whales.market) | Pre-market OTC | ✅ | ✅ | Solana, 20+ EVM |
+
+## Quick Start
+
+### With Claude Desktop / Cursor
+
+Add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "agent-trade": {
+      "command": "npx",
+      "args": ["-y", "agent-trade"],
+      "env": {}
+    }
+  }
+}
+```
+
+That's it — market data works immediately with zero config.
+
+### With Claude Code
 
 ```bash
-# Global (available in all projects)
-claude mcp add whales-market -s user -- npx -y whales-market-mcp
-
-# Project only (current project)
-claude mcp add whales-market -- npx -y whales-market-mcp
+claude mcp add agent-trade -- npx -y agent-trade
 ```
 
-### Claude Desktop
-
-Settings → Developer → Edit Config:
-
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "whales-market": {
-      "command": "npx",
-      "args": ["-y", "whales-market-mcp"]
-    }
-  }
-}
-```
-
-### Cursor
-
-Settings → MCP Servers → Add new MCP Server:
-
-```json
-{
-  "mcpServers": {
-    "whales-market": {
-      "command": "npx",
-      "args": ["-y", "whales-market-mcp"]
-    }
-  }
-}
-```
-
-### VS Code (Copilot)
-
-Add to `.vscode/settings.json` (workspace) or User Settings (global):
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "whales-market": {
-        "command": "npx",
-        "args": ["-y", "whales-market-mcp"]
-      }
-    }
-  }
-}
-```
-
-### Windsurf
-
-Cascade → MCP → Configure (`mcp_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "whales-market": {
-      "command": "npx",
-      "args": ["-y", "whales-market-mcp"]
-    }
-  }
-}
-```
-
-### Cline
-
-Settings → MCP Servers → Edit Config (`cline_mcp_settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "whales-market": {
-      "command": "npx",
-      "args": ["-y", "whales-market-mcp"]
-    }
-  }
-}
-```
-
-### Zed
-
-Settings → Extensions or `settings.json`:
-
-```json
-{
-  "context_servers": {
-    "whales-market": {
-      "command": {
-        "path": "npx",
-        "args": ["-y", "whales-market-mcp"]
-      }
-    }
-  }
-}
-```
-
-### Continue
-
-`.continue/config.yaml`:
-
-```yaml
-mcpServers:
-  - name: whales-market
-    command: npx
-    args: ["-y", "whales-market-mcp"]
-```
-
-### HTTP (Remote / Self-hosted)
+### With OpenClaw
 
 ```bash
-# Docker
-docker run -p 3000:3000 ghcr.io/bigbearman/whales-market-mcp
-
-# Or manually
-MCP_HTTP_PORT=3000 npx -y whales-market-mcp
+mcporter add agent-trade --command "npx -y agent-trade"
 ```
 
-Endpoints:
-- `POST /mcp` — JSON-RPC requests
-- `GET /mcp` — SSE stream
-- `DELETE /mcp` — Session termination
-- `GET /health` — Health check
+## Tools
 
----
-
-## Available Tools
-
-### Market Data (10 tools)
+### Universal Tools (all venues)
 
 | Tool | Description |
 |------|-------------|
-| `search_tokens` | Search/list tokens with filters (category, chain, sort) |
-| `get_token_detail` | Detailed info for a token by symbol |
-| `get_token_chart` | Historical price chart data |
-| `get_offers` | Buy/sell offers with filters |
-| `get_recent_trades` | Recent trades across all markets |
-| `get_market_stats` | Overall market statistics |
-| `get_wallet_info` | Wallet info, tier, and discount |
-| `get_orders_by_address` | All orders for a wallet address |
-| `get_upcoming_tokens` | Upcoming tokens list |
-| `get_leaderboard` | Referral leaderboard + live stats |
+| `list_venues` | List available trading venues and their status |
+| `search_markets` | Search markets across venues |
+| `get_market` | Get detailed market info |
+| `get_order_book` | Get order book (bids/asks) |
+| `get_recent_trades` | Get recent trades |
+| `trade` | Place a buy/sell order |
+| `cancel` | Cancel an open order |
+| `get_positions` | Get portfolio positions |
+| `get_orders` | Get open orders |
+| `wallet_status` | Check wallet balance and spend limits |
+| `setup_wallet` | Generate or configure wallet |
 
-### Wallet & Trading (12 tools)
+### Polymarket Tools
 
 | Tool | Description |
 |------|-------------|
-| `get_wallet_status` | Current wallet config, mode, spend limits |
-| `get_order_book` | Order book for a token (bids, asks, spread) |
-| `get_my_offers` | Your open/filled offers |
-| `get_my_orders` | Your orders |
-| `get_my_portfolio` | Portfolio summary (offers, orders, positions) |
-| `get_balance` | On-chain wallet balance (SOL/ETH) |
-| `get_networks` | Supported blockchain networks |
-| `create_buy_intent` | Create a buy offer |
-| `create_sell_intent` | Create a sell offer |
-| `react_to_offer` | Accept/fill an existing offer |
-| `cancel_offer` | Cancel your own offer |
-| `check_intent_status` | Check status of an offer |
+| `pm_list_tags` | List market categories/tags |
+| `pm_get_event` | Get event with all markets by slug |
+| `pm_derive_api_key` | Derive API credentials (one-time) |
 
----
+### Whales Market Tools
+
+| Tool | Description |
+|------|-------------|
+| `wm_get_token_chart` | Token price chart data |
+| `wm_get_market_stats` | Market statistics & overview |
+| `wm_get_wallet_info` | Wallet info by address |
+| `wm_get_upcoming_tokens` | Upcoming token listings |
 
 ## Configuration
 
 ### Environment Variables
 
+#### Global
+
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `WM_API_URL` | Whales Market API base URL | `https://api.whales.market` |
-| `WM_AUTH_TOKEN` | Bearer token for authenticated endpoints | _(optional)_ |
-| `MCP_HTTP_PORT` | Enable HTTP transport (e.g., `3000`) | _(stdio)_ |
-| `MCP_HTTP_HOST` | Bind address for HTTP mode | `0.0.0.0` |
+| `AGENT_TRADE_VENUES` | Enabled venues (comma-separated) | All available |
+| `AT_WALLET_TYPE` | Wallet type: `solana` or `evm` | `solana` |
+| `AT_AGENT_PRIVATE_KEY` | Agent wallet private key | — |
+| `AT_SPEND_LIMIT_PER_TX` | Max spend per transaction (USD) | `50` |
+| `AT_DAILY_LIMIT` | Max daily spend (USD) | `200` |
+| `AT_SOLANA_RPC` | Custom Solana RPC URL | Public RPC |
+| `AT_EVM_RPC` | Custom EVM RPC URL | Public RPC |
+| `MCP_HTTP_PORT` | Enable HTTP transport on this port | — (stdio) |
+| `MCP_HTTP_HOST` | HTTP bind address | `127.0.0.1` |
 
-### Wallet Configuration (for trading tools)
+#### Polymarket
 
-| Variable | Description |
-|----------|-------------|
-| `WM_AGENT_PRIVATE_KEY` | Private key for agent mode (auto-sign transactions) |
-| `WM_WALLET_ADDRESS` | Wallet address for user mode (preview only, no signing) |
-| `WM_WALLET_TYPE` | `solana` or `evm` (default: `solana`) |
-| `WM_DAILY_LIMIT` | Max daily spend in USD (default: 200) |
-| `WM_SPEND_LIMIT_PER_TX` | Max single trade in USD (default: 50) |
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `PM_PRIVATE_KEY` | Polygon wallet private key | For trading |
+| `PM_API_KEY` | Derived API key | For trading |
+| `PM_API_SECRET` | Derived API secret | For trading |
+| `PM_API_PASSPHRASE` | Derived API passphrase | For trading |
 
-**Modes:**
-- **Agent mode** (`WM_AGENT_PRIVATE_KEY`): Fully autonomous — validates limits, signs, and submits transactions.
-- **User mode** (`WM_WALLET_ADDRESS`): Read-only + preview — shows trade details but does not sign.
+> **Read-only mode needs zero config.** Set `PM_PRIVATE_KEY` to enable trading. Use `pm_derive_api_key` tool to generate API credentials.
 
----
+#### Whales Market
 
-## Usage Examples
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `WM_API_URL` | API base URL | No (defaults to mainnet) |
+| `WM_AUTH_TOKEN` | Auth token for private endpoints | For portfolio |
 
-Once connected, ask your AI assistant:
+## Trading Modes
 
-- *"Search for pre-market tokens on Whales Market"*
-- *"What's the current price of HYPE?"*
-- *"Show me recent trades"*
-- *"Get market statistics"*
-- *"Show the order book for PENGU"*
-- *"What tokens are coming soon?"*
-- *"Check my portfolio"*
-- *"Create a buy offer for 10 HYPE at $25"*
+### User Mode (default)
 
----
+Agent previews the trade, you sign and execute manually:
+
+```
+You: "Buy 10 YES shares on 'Bitcoin above 100k by July?'"
+Agent: "Preview: Buy 10 YES @ $0.62 = $6.20 total. Confirm?"
+```
+
+### Agent Mode
+
+Agent signs and executes trades autonomously with a dedicated wallet:
+
+```
+You: "Find underpriced markets and buy"
+Agent: [executes trade on-chain] "Bought 10 YES @ $0.62, tx: 0x..."
+```
+
+**Safety features:**
+- Per-transaction spend limit (default $50)
+- Daily spend limit (default $200)
+- Price sanity checks against market data
+- Persistent spend tracking across restarts
+- Private key never exposed in responses
+
+## Architecture
+
+```
+┌─────────────────────────────┐
+│     AI Agent (Claude, etc)  │
+│         MCP Client          │
+└──────────┬──────────────────┘
+           │ MCP Protocol
+┌──────────▼──────────────────┐
+│       agent-trade           │
+│    Universal MCP Tools      │
+│  ┌─────────┐ ┌───────────┐  │
+│  │ Wallet  │ │  Safety   │  │
+│  │ Manager │ │ (Spend    │  │
+│  │         │ │  Tracker) │  │
+│  └────┬────┘ └─────┬─────┘  │
+│       │    Adapter  │        │
+│       │   Registry  │        │
+│  ┌────▼────┐ ┌─────▼─────┐  │
+│  │Polymar- │ │  Whales   │  │
+│  │  ket    │ │  Market   │  │
+│  │ Gamma + │ │ API +     │  │
+│  │  CLOB   │ │ Solana +  │  │
+│  │         │ │ EVM       │  │
+│  └─────────┘ └───────────┘  │
+└──────────────────────────────┘
+```
+
+## Adding New Venues
+
+agent-trade uses an adapter pattern. To add a new venue:
+
+1. Create `src/adapters/your-venue/index.ts` implementing `TradingAdapter`
+2. Register in `src/registry.ts`
+3. That's it — universal tools work automatically
+
+```typescript
+import { TradingAdapter, Market, TradeIntent, TradeResult } from '../adapter.js';
+
+export class YourVenueAdapter implements TradingAdapter {
+  name = 'your-venue';
+  displayName = 'Your Venue';
+
+  isConfigured(): boolean { return true; }
+  async searchMarkets(params): Promise<Market[]> { /* ... */ }
+  async trade(intent: TradeIntent): Promise<TradeResult> { /* ... */ }
+  // ... implement remaining methods
+}
+```
 
 ## Development
 
 ```bash
-git clone https://github.com/bigbearman/whales-market-mcp.git
-cd whales-market-mcp
+git clone https://github.com/bigbearman/agent-trade.git
+cd agent-trade
 npm install
-npm run dev       # Dev mode with hot reload
-npm run build     # Compile TypeScript
-npm run inspect   # MCP Inspector for debugging
+npm run build
+npm run dev  # watch mode
+```
+
+### Test with MCP Inspector
+
+```bash
+npm run inspect
 ```
 
 ## License
 
-MIT — [Whales Market](https://whales.market)
+MIT
