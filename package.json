@@ -1,7 +1,7 @@
 {
   "name": "agent-trade",
   "version": "0.1.0",
-  "description": "MCP server for AI agent trading — any agent, any venue",
+  "description": "MCP server for AI agent trading \u2014 any agent, any venue",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -25,19 +25,18 @@
     "ai-agent",
     "trading",
     "polymarket",
+    "prediction-market",
     "defi",
-    "prediction-market"
+    "solana",
+    "evm",
+    "model-context-protocol"
   ],
-  "author": {
-    "name": "Whales Market",
-    "email": "dev@whales.market",
-    "url": "https://whales.market"
-  },
+  "author": "bigbearman",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bigbearman/whales-market-mcp.git"
+    "url": "https://github.com/bigbearman/agent-trade.git"
   },
-  "homepage": "https://whales.market",
+  "homepage": "https://github.com/bigbearman/agent-trade",
   "license": "MIT",
   "devDependencies": {
     "@types/cors": "^2.8.19",

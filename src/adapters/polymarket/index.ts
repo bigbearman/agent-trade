@@ -69,23 +69,23 @@ export class PolymarketAdapter implements TradingAdapter {
     const take = (params.take as number | undefined) ?? 20;
     const offset = (page - 1) * take;
 
-    // If search term provided, search events (more complete), otherwise list markets
+    // If search term provided, fetch markets and filter by keyword (Gamma API has no text search)
     if (search) {
-      const events = await this.gamma.getEvents({ slug: search, limit: take, offset });
-      const markets: Market[] = [];
-      for (const event of events) {
-        for (const m of event.markets || []) {
-          markets.push(gammaMarketToMarket(m));
-        }
-      }
-      // Also search markets directly by slug
-      const directMarkets = await this.gamma.getMarkets({ slug: search, limit: take, offset });
-      for (const m of directMarkets) {
-        if (!markets.some((existing) => existing.id === (m.slug || m.conditionId))) {
-          markets.push(gammaMarketToMarket(m));
-        }
-      }
-      return markets;
+      const searchLower = search.toLowerCase();
+      // Fetch a larger batch and filter client-side
+      // Fetch multiple pages for broader search coverage
+      const batch1 = await this.gamma.getMarkets({ limit: 100, offset: 0 });
+      const batch2 = await this.gamma.getMarkets({ limit: 100, offset: 100 });
+      const gammaMarkets = [...batch1, ...batch2];
+      const filtered = gammaMarkets
+        .filter((m) => {
+          const q = (m.question || '').toLowerCase();
+          const s = (m.slug || '').toLowerCase();
+          return q.includes(searchLower) || s.includes(searchLower);
+        })
+        .slice(offset, offset + take)
+        .map(gammaMarketToMarket);
+      return filtered;
     }
 
     const gammaMarkets = await this.gamma.getMarkets({
