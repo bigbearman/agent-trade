@@ -28,6 +28,13 @@ function gammaMarketToMarket(m: GammaMarket): Market {
     venue: 'polymarket',
     category: 'prediction',
     status: m.closed ? 'closed' : m.active ? 'active' : 'inactive',
+    volume: parseFloat(String(m.volume || 0)),
+    liquidity: parseFloat(String(m.liquidity || 0)),
+    price_yes: prices.yes,
+    price_no: prices.no,
+    price: prices.yes,
+    end_date: m.endDate,
+    description: m.description ? m.description.slice(0, 200) : undefined,
   };
 }
 

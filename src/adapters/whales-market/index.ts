@@ -160,6 +160,8 @@ export class WhalesMarketAdapter implements TradingAdapter {
       category: String(t.category || 'pre_market'),
       chain: t.chain_id ? String(t.chain_id) : undefined,
       status: String(t.status || 'active'),
+      volume: t.volume != null ? parseFloat(String(t.volume)) : undefined,
+      price: t.last_price != null ? parseFloat(String(t.last_price)) : undefined,
     }));
   }
 

@@ -8,6 +8,14 @@ export interface Market {
   category: string;
   chain?: string;
   status: string;
+  // Optional enriched fields
+  volume?: number;
+  liquidity?: number;
+  price?: number;         // Current price or YES probability
+  price_yes?: number;     // YES outcome price (prediction markets)
+  price_no?: number;      // NO outcome price (prediction markets)
+  end_date?: string;      // Market expiry/resolution date
+  description?: string;   // Short description
 }
 
 export interface OrderBookEntry {

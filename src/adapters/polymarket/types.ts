@@ -38,6 +38,14 @@ export interface GammaMarket {
   image: string;
   icon: string;
   tags: GammaTag[];
+  // Additional fields from API
+  bestBid?: number;
+  bestAsk?: number;
+  competitive?: number;
+  volume24hr?: number;
+  volume1wk?: number;
+  commentCount?: number;
+  events?: GammaEvent[];
 }
 
 export interface GammaTag {
