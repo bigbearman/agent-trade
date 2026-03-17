@@ -1,0 +1,66 @@
+name: agent-trade
+description: MCP server for AI agent trading — any agent, any venue. Polymarket prediction markets, Whales Market OTC pre-markets, multi-chain (Solana + 20+ EVM).
+license: MIT
+homepage: https://github.com/bigbearman/agent-trade
+repository: https://github.com/bigbearman/agent-trade
+
+runtime:
+  type: node
+  command: npx
+  args:
+    - -y
+    - agent-trade
+
+capabilities:
+  tools: true
+  resources: false
+  prompts: false
+
+categories:
+  - finance
+  - trading
+  - defi
+  - blockchain
+
+tags:
+  - trading
+  - polymarket
+  - prediction-markets
+  - defi
+  - solana
+  - evm
+  - agent
+  - mcp-server
+
+config:
+  properties:
+    AT_AGENT_PRIVATE_KEY:
+      description: Agent wallet private key (Solana base58 or EVM hex). Leave empty for read-only / user mode.
+      type: string
+      required: false
+      secret: true
+    AT_WALLET_TYPE:
+      description: Wallet type — "solana" (default) or "evm"
+      type: string
+      required: false
+      default: solana
+    AT_SPEND_LIMIT_PER_TX:
+      description: Max spend per transaction in USD (default 50)
+      type: number
+      required: false
+      default: 50
+    AT_DAILY_LIMIT:
+      description: Max daily spend in USD (default 200)
+      type: number
+      required: false
+      default: 200
+    PM_PRIVATE_KEY:
+      description: Polygon wallet private key for Polymarket trading
+      type: string
+      required: false
+      secret: true
+    AGENT_TRADE_VENUES:
+      description: Comma-separated list of enabled venues. Default is all.
+      type: string
+      required: false
+      default: whales-market,polymarket
